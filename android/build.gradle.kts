@@ -5,6 +5,10 @@
 // Contents of this file should be generated automatically by
 // dev/tools/bin/generate_gradle_lockfiles.dart, but currently are not.
 // See #141540.
+plugins {
+    id "com.hikvision.gradle.cyclonedx" version "1.0.2"
+}
+
 
 allprojects {
     repositories {

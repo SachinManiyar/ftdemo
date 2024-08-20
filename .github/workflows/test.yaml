@@ -15,6 +15,11 @@ jobs:
   build:
     name: Build APK and Generate SBOM
     runs-on: ubuntu-latest
+    outputs:
+      apk-path: ${{ steps.build-apk.outputs.apk-path }}
+      sbom-path: ${{ steps.upload-sbom.outputs.sbom-path }}
+      hashes: ${{ steps.generate-slsa-provenance.outputs.hashes }}
+
     steps:
       - uses: actions/checkout@v2
         with:
@@ -41,8 +46,10 @@ jobs:
           curl -sL https://firebase.tools | bash
 
       - name: Build APK
+        id: build-apk
         run: |
           flutter build apk --debug
+          echo "apk-path=build/app/outputs/apk/debug/app-debug.apk" >> $GITHUB_ENV
 
       - name: Set up CycloneDX Gradle Plugin
         run: |
@@ -50,46 +57,38 @@ jobs:
           echo 'cyclonedxBom { format = "json" outputFile = file("build/reports/cyclonedx/bom.json") }' >> build.gradle
 
       - name: Generate SBOM
+        id: generate-sbom
         run: |
           ./gradlew cyclonedxBom
+          echo "sbom-path=build/reports/cyclonedx/bom.json" >> $GITHUB_ENV
 
       - name: Upload SBOM as artifact
+        id: upload-sbom
         uses: actions/upload-artifact@v2
         with:
           name: sbom
-          path: build/reports/cyclonedx/bom.json
+          path: ${{ env.sbom-path }}
 
       - name: Generate SLSA Provenance
-        id: generate-provenance
+        id: generate-slsa-provenance
         run: |
           set -euo pipefail
           
-          # List the APK and other artifacts
+          # Generate base64 encoded SHA256 hashes for the APK
           apk_files=$(find build/app/outputs/apk/debug -type f -name "*.apk")
-          
-          # Generate base64 encoded SHA256 hashes for the artifacts
           hashes=$(sha256sum $apk_files | base64 -w0)
           echo "hashes=${hashes}" >> $GITHUB_ENV
 
-      - name: Create SLSA Provenance
-        uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1.4.0
-        with:
-          base64-subjects: "${{ env.hashes }}"
-          distribution: "apk"  # Specify the distribution type, such as 'apk' or 'aab'
-          upload-assets: true  # Upload to a new release (optional)
-
-      - name: Run Fastlane apk
-        working-directory: ./android
-        run: |
-          bundle exec fastlane android distribute --verbose 
-        env:
-          APP_ID: ${{ secrets.APP_ID }}
-          FIREBASE_CLI_TOKEN: ${{ secrets.FIREBASE_CLI_TOKEN }}
-
-      # Optionally, you can push the APK to Releases if needed
-      # - name: Push APK to Releases
-      #   uses: ncipollo/release-action@v1
-      #   with:
-      #     artifacts: "build/app/outputs/apk/debug/*.apk"
-      #     token: ${{ secrets.TOKEN }}
-      #     tag: v1.0.${{ github.run_number }}
+  provenance:
+    name: Generate SLSA Provenance
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      actions: read   # To read the workflow path
+      id-token: write # To sign the provenance
+      contents: write # To add assets to a release
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1.4.0
+    with:
+      base64-subjects: "${{ needs.build.outputs.hashes }}"
+      distribution: "apk"  # Specify the distribution type
+      upload-assets: true  # Optional: Upload to a new release

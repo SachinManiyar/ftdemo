@@ -1,0 +1,57 @@
+name: SLSA Provenance Generator for Android
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      digests: ${{ steps.hash.outputs.digests }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'  # Set the JDK version for your project
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Build the Android app
+        run: ./gradlew assembleRelease  # Build the APK/AAB for release
+
+      - name: Generate subject for provenance
+        id: hash
+        run: |
+          set -euo pipefail
+          
+          # Define the location of your APK or AAB files
+          apk_files=$(find app/build/outputs/apk/release -type f -name "*.apk")
+          aab_files=$(find app/build/outputs/bundle/release -type f -name "*.aab")
+          
+          # List all artifact files
+          files="$apk_files $aab_files"
+          
+          # Generate the subjects (base64 encoded)
+          echo "hashes=$(sha256sum $files | base64 -w0)" >> $GITHUB_ENV
+
+  provenance:
+    needs: [build]
+    permissions:
+      actions: read   # To read the workflow path
+      id-token: write # To sign the provenance
+      contents: write # To add assets to a release
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1.4.0
+    with:
+      base64-subjects: "${{ needs.build.outputs.digests }}"
+      upload-assets: true # Optional: Upload to a new release
